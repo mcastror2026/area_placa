@@ -206,14 +206,76 @@ export function filterParticles(mask, width, height, opts) {
   return { mask: out, count }
 }
 
+// Selecciona por "varita magica": desde un pixel semilla, rellena la region
+// conexa de color similar (distancia RGB <= tolerancia) dentro de la ROI y la
+// añade a la mascara dada. Devuelve la misma mascara mutada.
+export function magicWandAdd(imageData, roi, mask, seedX, seedY, tolerance) {
+  const { data, width, height } = imageData
+  const { cx, cy } = roi
+  const rx = Math.max(1, roi.rx)
+  const ry = Math.max(1, roi.ry)
+  const inEllipse = (x, y) => {
+    const ex = (x - cx) / rx
+    const ey = (y - cy) / ry
+    return ex * ex + ey * ey <= 1
+  }
+  if (seedX < 0 || seedY < 0 || seedX >= width || seedY >= height) return mask
+  if (!inEllipse(seedX, seedY)) return mask
+  const si = (seedY * width + seedX) * 4
+  const sr = data[si]
+  const sg = data[si + 1]
+  const sb = data[si + 2]
+  const tol2 = tolerance * tolerance
+  const visited = new Uint8Array(width * height)
+  const stack = [seedY * width + seedX]
+  while (stack.length) {
+    const q = stack.pop()
+    if (visited[q]) continue
+    visited[q] = 1
+    const x = q % width
+    const y = (q - x) / width
+    if (!inEllipse(x, y)) continue
+    const i = q * 4
+    const dr = data[i] - sr
+    const dg = data[i + 1] - sg
+    const db = data[i + 2] - sb
+    if (dr * dr + dg * dg + db * db > tol2) continue
+    mask[q] = 1
+    if (x > 0) stack.push(q - 1)
+    if (x < width - 1) stack.push(q + 1)
+    if (y > 0) stack.push(q - width)
+    if (y < height - 1) stack.push(q + width)
+  }
+  return mask
+}
+
+// Pincel circular: marca (value=1) o borra (value=0) los pixeles de la mascara
+// dentro de un radio alrededor de (cx, cy). Mutacion in situ.
+export function paintBrush(mask, width, height, cx, cy, radius, value) {
+  const r2 = radius * radius
+  const xMin = Math.max(0, Math.floor(cx - radius))
+  const xMax = Math.min(width - 1, Math.ceil(cx + radius))
+  const yMin = Math.max(0, Math.floor(cy - radius))
+  const yMax = Math.min(height - 1, Math.ceil(cy + radius))
+  for (let y = yMin; y <= yMax; y++) {
+    const dy = y - cy
+    for (let x = xMin; x <= xMax; x++) {
+      const dx = x - cx
+      if (dx * dx + dy * dy <= r2) mask[y * width + x] = value
+    }
+  }
+}
+
 /**
  * Analiza el crecimiento dentro de la ROI.
  * @param {ImageData} imageData
  * @param {{cx,cy,rx,ry}} roi
  * @param {{min:number,max:number}} range  Rango de luminosidad considerado hongo.
  * @param {{minSize:number,largestOnly:boolean}} particleOpts
+ * @param {Uint8Array|null} manualMask  Si se pasa, la deteccion usa esta mascara
+ *   (retoque manual / varita) en vez del umbral de luminosidad.
  */
-export function analyzeGrowth(imageData, roi, range, particleOpts) {
+export function analyzeGrowth(imageData, roi, range, particleOpts, manualMask) {
   const { data, width, height } = imageData
   const { min, max } = range
   const rawMask = new Uint8Array(width * height)
@@ -221,9 +283,14 @@ export function analyzeGrowth(imageData, roi, range, particleOpts) {
 
   forEachInEllipse(width, height, roi, (x, y) => {
     roiAreaPx++
-    const i = (y * width + x) * 4
-    const lum = luminance(data[i], data[i + 1], data[i + 2])
-    if (lum >= min && lum <= max) rawMask[y * width + x] = 1
+    const p = y * width + x
+    if (manualMask) {
+      if (manualMask[p]) rawMask[p] = 1
+    } else {
+      const i = p * 4
+      const lum = luminance(data[i], data[i + 1], data[i + 2])
+      if (lum >= min && lum <= max) rawMask[p] = 1
+    }
   })
 
   let mask = rawMask

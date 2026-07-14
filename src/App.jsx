@@ -3,6 +3,8 @@ import {
   analyzeGrowth,
   computeHistogram,
   autoThreshold,
+  magicWandAdd,
+  paintBrush,
 } from './imageAnalysis'
 import './App.css'
 
@@ -19,10 +21,11 @@ export default function App() {
   const canvasRef = useRef(null)
   const baseDataRef = useRef(null)
   const dragRef = useRef(null)
+  const manualMaskRef = useRef(null)
 
   const [size, setSize] = useState({ w: 0, h: 0 })
   const [hasImage, setHasImage] = useState(false)
-  const [mode, setMode] = useState('roi') // 'roi' | 'scale'
+  const [tool, setTool] = useState('roi') // 'roi' | 'scale' | 'wand' | 'brush'
 
   const [roi, setRoi] = useState({ cx: 0, cy: 0, rx: 0, ry: 0 })
   const [range, setRange] = useState({ min: 128, max: 255 })
@@ -30,6 +33,12 @@ export default function App() {
   const [method, setMethod] = useState('default')
   const [overlay, setOverlay] = useState(true)
   const [particles, setParticles] = useState({ minSize: 0, largestOnly: false })
+
+  // Ajuste manual del crecimiento (varita / pincel).
+  const [maskActive, setMaskActive] = useState(false)
+  const [maskVersion, setMaskVersion] = useState(0)
+  const [wandTol, setWandTol] = useState(40)
+  const [brush, setBrush] = useState({ size: 24, erase: false })
 
   const [scaleLine, setScaleLine] = useState(null) // {x1,y1,x2,y2} px
   const [scale, setScale] = useState(null) // {pixelsPerUnit, unit}
@@ -58,6 +67,9 @@ export default function App() {
       setRoi({ cx: Math.round(w / 2), cy: Math.round(h / 2), rx: r, ry: r })
       setScaleLine(null)
       setScale(null)
+      manualMaskRef.current = null
+      setMaskActive(false)
+      setMaskVersion(0)
       URL.revokeObjectURL(img.src)
     }
     img.src = URL.createObjectURL(file)
@@ -70,7 +82,8 @@ export default function App() {
     const ctx = canvas.getContext('2d', { willReadFrequently: true })
     const base = baseDataRef.current
 
-    const res = analyzeGrowth(base, roi, range, particles)
+    const manual = maskActive ? manualMaskRef.current : null
+    const res = analyzeGrowth(base, roi, range, particles, manual)
     setResults({
       roiAreaPx: res.roiAreaPx,
       growthPx: res.growthPx,
@@ -125,7 +138,7 @@ export default function App() {
         ctx.fill()
       }
     }
-  }, [hasImage, roi, range, overlay, particles, scaleLine])
+  }, [hasImage, roi, range, overlay, particles, scaleLine, maskActive, maskVersion])
 
   // --- Interaccion con el canvas (pointer) ---
   const toCanvas = (e) => {
@@ -139,13 +152,41 @@ export default function App() {
     }
   }
 
+  // Garantiza que exista la mascara manual con el tamaño de la imagen.
+  const ensureMask = () => {
+    const n = size.w * size.h
+    if (!manualMaskRef.current || manualMaskRef.current.length !== n) {
+      manualMaskRef.current = new Uint8Array(n)
+    }
+    return manualMaskRef.current
+  }
+
+  const paintAt = (p) => {
+    const mask = ensureMask()
+    paintBrush(mask, size.w, size.h, p.x, p.y, brush.size, brush.erase ? 0 : 1)
+    setMaskActive(true)
+    setMaskVersion((v) => v + 1)
+  }
+
+  const wandAt = (p) => {
+    if (!baseDataRef.current) return
+    const mask = ensureMask()
+    magicWandAdd(baseDataRef.current, roi, mask, p.x, p.y, wandTol)
+    setMaskActive(true)
+    setMaskVersion((v) => v + 1)
+  }
+
   const onPointerDown = (e) => {
     if (!hasImage) return
     canvasRef.current.setPointerCapture(e.pointerId)
     const p = toCanvas(e)
-    dragRef.current = { start: p, mode }
-    if (mode === 'scale') {
+    dragRef.current = { start: p, tool }
+    if (tool === 'scale') {
       setScaleLine({ x1: p.x, y1: p.y, x2: p.x, y2: p.y })
+    } else if (tool === 'brush') {
+      paintAt(p)
+    } else if (tool === 'wand') {
+      wandAt(p)
     } else {
       setRoi((r) => ({ ...r, cx: p.x, cy: p.y }))
     }
@@ -155,9 +196,11 @@ export default function App() {
     const drag = dragRef.current
     if (!drag) return
     const p = toCanvas(e)
-    if (drag.mode === 'scale') {
+    if (drag.tool === 'scale') {
       setScaleLine((l) => (l ? { ...l, x2: p.x, y2: p.y } : l))
-    } else {
+    } else if (drag.tool === 'brush') {
+      paintAt(p)
+    } else if (drag.tool === 'roi') {
       const dx = p.x - drag.start.x
       const dy = p.y - drag.start.y
       const d = Math.round(Math.sqrt(dx * dx + dy * dy))
@@ -170,6 +213,23 @@ export default function App() {
       try { canvasRef.current.releasePointerCapture(e.pointerId) } catch { /* noop */ }
     }
     dragRef.current = null
+  }
+
+  // Copia la deteccion por umbral a la mascara manual para retocarla.
+  const seedFromThreshold = () => {
+    if (!baseDataRef.current) return
+    const res = analyzeGrowth(baseDataRef.current, roi, range, null, null)
+    const mask = ensureMask()
+    mask.set(res.mask)
+    setMaskActive(true)
+    setMaskVersion((v) => v + 1)
+  }
+
+  // Vuelve a la deteccion automatica por umbral.
+  const clearManual = () => {
+    if (manualMaskRef.current) manualMaskRef.current.fill(0)
+    setMaskActive(false)
+    setMaskVersion((v) => v + 1)
   }
 
   // --- Set Scale ---
@@ -275,14 +335,14 @@ export default function App() {
           {hasImage && (
             <div className="tool-row">
               <span>Herramienta:</span>
-              <button
-                className={mode === 'roi' ? 'active' : ''}
-                onClick={() => setMode('roi')}
-              >Ajustar ROI</button>
-              <button
-                className={mode === 'scale' ? 'active' : ''}
-                onClick={() => setMode('scale')}
-              >Definir escala (linea)</button>
+              <button className={tool === 'roi' ? 'active' : ''}
+                onClick={() => setTool('roi')}>Ajustar ROI</button>
+              <button className={tool === 'scale' ? 'active' : ''}
+                onClick={() => setTool('scale')}>Escala</button>
+              <button className={tool === 'wand' ? 'active' : ''}
+                onClick={() => setTool('wand')}>Varita</button>
+              <button className={tool === 'brush' ? 'active' : ''}
+                onClick={() => setTool('brush')}>Pincel</button>
             </div>
           )}
 
@@ -298,9 +358,10 @@ export default function App() {
           </div>
           {hasImage && (
             <p className="hint">
-              {mode === 'roi'
-                ? 'Arrastra desde el centro de la placa hacia el borde para dibujar la ROI; afina con los sliders.'
-                : 'Arrastra una linea sobre una distancia conocida (p. ej. el diametro de la placa) y define la escala.'}
+              {tool === 'roi' && 'Arrastra desde el centro de la placa hacia el borde para dibujar la ROI; afina con los sliders.'}
+              {tool === 'scale' && 'Arrastra una linea sobre una distancia conocida (p. ej. el diametro de la placa) y define la escala.'}
+              {tool === 'wand' && 'Haz clic sobre la colonia: selecciona automaticamente la region conexa de color similar (ajusta la tolerancia).'}
+              {tool === 'brush' && 'Pinta o borra el area de crecimiento arrastrando (ajusta el tamaño y el modo borrar).'}
             </p>
           )}
         </section>
@@ -393,6 +454,32 @@ export default function App() {
                 onChange={(e) => setParticles((p) => ({ ...p, largestOnly: e.target.checked }))} />
               Solo la region conectada mas grande
             </label>
+          </fieldset>
+
+          <fieldset disabled={!hasImage}>
+            <legend>Ajuste del crecimiento</legend>
+            <div className="scale-status">
+              {maskActive
+                ? 'Modo manual activo (varita / pincel)'
+                : 'Deteccion automatica por umbral'}
+            </div>
+            <label>Varita: tolerancia de color {wandTol}
+              <input type="range" min="1" max="150" value={wandTol}
+                onChange={(e) => setWandTol(+e.target.value)} />
+            </label>
+            <label>Pincel: tamaño {brush.size} px
+              <input type="range" min="2" max="80" value={brush.size}
+                onChange={(e) => setBrush((b) => ({ ...b, size: +e.target.value }))} />
+            </label>
+            <label className="check">
+              <input type="checkbox" checked={brush.erase}
+                onChange={(e) => setBrush((b) => ({ ...b, erase: e.target.checked }))} />
+              Pincel en modo borrar
+            </label>
+            <div className="row">
+              <button type="button" onClick={seedFromThreshold}>Copiar umbral → manual</button>
+              <button type="button" className="ghost-btn" onClick={clearManual} disabled={!maskActive}>Volver a umbral</button>
+            </div>
           </fieldset>
 
           {results && (

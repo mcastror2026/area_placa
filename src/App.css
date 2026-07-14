@@ -175,6 +175,13 @@ header h1 {
 .controls button:hover { background: #38bdf8; }
 .controls button:disabled { background: #334155; color: #64748b; cursor: not-allowed; }
 
+.controls button.ghost-btn {
+  background: transparent;
+  color: #94a3b8;
+  border: 1px solid #334155;
+}
+.controls button.ghost-btn:hover:not(:disabled) { background: #1e293b; color: #cbd5e1; }
+
 /* --- Resultados actuales --- */
 .results {
   border: 1px solid #14532d;
