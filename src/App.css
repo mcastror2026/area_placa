@@ -26,8 +26,28 @@ header h1 {
   .layout { grid-template-columns: 1fr; }
 }
 
-.canvas-panel input[type='file'] {
+.file-row {
+  display: flex;
+  gap: 10px;
   margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+.btn-file {
+  background: #0ea5e9;
+  color: #052032;
+  border-radius: 6px;
+  padding: 8px 14px;
+  font-weight: 600;
+  font-size: 0.9rem;
+  cursor: pointer;
+  display: inline-block;
+}
+
+.btn-file:hover { background: #38bdf8; }
+
+.btn-file input[type='file'] {
+  display: none;
 }
 
 .canvas-wrap {

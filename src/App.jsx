@@ -128,11 +128,25 @@ export default function App() {
 
       <div className="layout">
         <section className="canvas-panel">
-          <input
-            type="file"
-            accept="image/*"
-            onChange={(e) => loadImage(e.target.files?.[0])}
-          />
+          <div className="file-row">
+            <label className="btn-file">
+              Seleccionar imagen
+              <input
+                type="file"
+                accept="image/*"
+                onChange={(e) => loadImage(e.target.files?.[0])}
+              />
+            </label>
+            <label className="btn-file">
+              Tomar foto
+              <input
+                type="file"
+                accept="image/*"
+                capture="environment"
+                onChange={(e) => loadImage(e.target.files?.[0])}
+              />
+            </label>
+          </div>
           <div className="canvas-wrap">
             {!hasImage && (
               <div className="placeholder">Sin imagen cargada</div>
