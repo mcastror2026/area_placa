@@ -611,6 +611,8 @@ export default function App() {
           )}
         </section>
       </div>
+
+      <footer className="app-footer">Versión 1.0 MC</footer>
     </div>
   )
 }
